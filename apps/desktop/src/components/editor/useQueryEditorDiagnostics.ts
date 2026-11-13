@@ -308,13 +308,21 @@ export function useQueryEditorDiagnostics(options: QueryEditorDiagnosticsOptions
       }
       try {
         const match = await metadata.findExactSemanticDiagnosticTable(table, scope);
-        if (!match) missingTables.add(tableReferenceKey(table));
+        if (!match && !(await resolvesThroughOraclePublicSynonym(table, scope))) missingTables.add(tableReferenceKey(table));
         enriched.push(match?.schema ? { ...table, schema: match.schema } : table);
       } catch {
         enriched.push(table);
       }
     }
     return { tables: enriched, missingTables };
+  }
+
+  // Oracle resolves an unqualified name in the current schema first and then
+  // through a PUBLIC synonym (DUAL is one), so such a name is only unknown when
+  // PUBLIC has no synonym for it either. The reference itself stays unqualified.
+  async function resolvesThroughOraclePublicSynonym(table: SqlTableReference, scope?: CompletionMetadataScope): Promise<boolean> {
+    if (props.databaseType !== "oracle" || table.schema) return false;
+    return !!(await metadata.findExactSemanticDiagnosticTable({ ...table, schema: "PUBLIC" }, scope));
   }
 
   async function ensureColumnsForSemanticDiagnostics(tables: SqlTableReference[], scope?: CompletionMetadataScope, limit = MAX_SEMANTIC_DIAGNOSTIC_COLUMN_TABLES): Promise<Set<string>> {

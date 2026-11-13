@@ -210,6 +210,23 @@ describe("QueryEditor diagnostic scheduling ownership", () => {
     expect(metadata.findExactSemanticDiagnosticTable).toHaveBeenCalledWith(expect.objectContaining({ name: "orders", database: "mk_passport_api", schema: "dbo" }), expect.anything());
   });
 
+  it.each([
+    { sql: "SELECT 1 AS N FROM DUAL", table: { name: "DUAL" }, expected: [] },
+    { sql: "SELECT 1 AS N FROM APP.DUAL", table: { name: "DUAL", schema: "APP" }, expected: ["Unknown table APP.DUAL"] },
+    { sql: "SELECT 1 AS N FROM MISSING", table: { name: "MISSING" }, expected: ["Unknown table MISSING"] },
+  ])("resolves only an unqualified Oracle name through a PUBLIC synonym: $sql (#14862)", async ({ sql, table, expected }) => {
+    const reference = table.schema ? `${table.schema}.${table.name}` : table.name;
+    const start = sql.indexOf(reference);
+    analyze.mockResolvedValue({ tables: [{ ...table, span: { start_line: 1, start_column: start + 1, end_line: 1, end_column: start + reference.length } }], columns: [] });
+    const { buildSqlSemanticDiagnostics } = await vi.importActual<typeof import("@/lib/sql/semantic/diagnostics")>("@/lib/sql/semantic/diagnostics");
+    buildDiagnostics.mockImplementation(buildSqlSemanticDiagnostics);
+    const { diagnostics, metadata } = createHarness({ databaseType: "oracle", dialect: "oracle", schema: "APP", modelValue: sql });
+    metadata.findExactSemanticDiagnosticTable.mockImplementation(async (lookup: { name: string; schema?: string }) => (lookup.schema === "PUBLIC" && lookup.name === "DUAL" ? { name: "DUAL", schema: "PUBLIC" } : null));
+    diagnostics.scheduleSemanticDiagnostics(0);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(diagnostics.diagnostics.map((diagnostic) => diagnostic.message)).toEqual(expected);
+  });
+
   it("maps a typed execution error onto a selected statement in a larger document", () => {
     const statement = "SELECT missing;";
     const modelValue = `SELECT 1;\n${statement}`;
